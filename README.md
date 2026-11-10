@@ -2,7 +2,7 @@
 
 Local Fedora KDE prototype with two paths: **Process a video** uploads a local
 clip to the localhost app, lets you mark a wrist crop, stabilizes that crop, and
-compares FastDMM motion amplification at 5×, 10×, and 20×. **Live camera** uses
+compares classical Eulerian color or motion amplification at up to three gains. **Live camera** uses
 Galaxy S24 rear camera → scrcpy over USB/ADB → V4L2 loopback → FFmpeg → causal
 Eulerian magnification. A synthetic source is available on the live camera path.
 
@@ -62,19 +62,20 @@ Stop terminates only the scrcpy/FFmpeg children started by this app.
 3. Set the temporal band in Hz. The default is 0.7–3 Hz; the backend converts
    it using the source video's measured FPS.
 4. Start processing. The backend uploads the file to local `.runtime/video-jobs`,
-   registers the crop to its first frame, then runs FastDMM at 5×, 10×, and 20×.
+   optionally registers the crop to its first frame, then runs EVM at the selected gains.
 5. Compare the stabilized original crop with the three amplified crops using
    the shared Play/Pause and seek controls. Download each amplified result.
 
 Only the selected, margin-expanded rectangular crop is stabilized and sent to
-FastDMM. The rest of the original frame is excluded from stabilization and
+the EVM algorithm. The rest of the original frame is excluded from stabilization and
 amplification and does not appear in the outputs.
 The original crop and each model result retain the input frame rate. Completed
 job files remain under `.runtime/video-jobs` until **Clear results** is used.
 After successful crop preparation, the uploaded full video copy is removed.
-FastDMM must be installed in `/home/vinnavan/user/models/video-mag`; override
-that location with `VIDEO_MAG_FASTMM_ROOT` and `VIDEO_MAG_FASTMM_PYTHON` when
-starting the backend if needed. This path uses FastDMM only; SAM is not used.
+Both processing paths use classical EVM. The UI exposes amplification mode,
+gain, frequency band, pyramid depth, and Butterworth filter order. Recorded
+video settings also include the number of outputs, crop margin, stabilization
+toggle, and maximum stabilization shift. No AI runtime or weights are needed.
 
 ## Algorithms and limits
 

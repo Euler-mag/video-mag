@@ -51,3 +51,5 @@
 .workflow-footnote { color: #7e8aa0; font-size: 11px; line-height: 1.6; margin: 0; }
 @media (max-width: 900px) { .selection-layout { grid-template-columns: 1fr; } }
 @media (max-width: 650px) { .workflow-heading, .comparison-heading { align-items: flex-start; flex-direction: column; } .comparison-grid { grid-template-columns: 1fr; } .shared-timeline { flex-wrap: wrap; } .shared-timeline input { order: 3; flex-basis: 100%; } }
+.processing-fields { min-width: 0; padding: 0; border: 0; margin: 0; }
+.processing-fields summary { padding: 7px 0; }

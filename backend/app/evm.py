@@ -5,8 +5,8 @@ from scipy.signal import butter, sosfilt, sosfilt_zi
 
 
 class TemporalBandpass:
-    def __init__(self, low, high, fps):
-        self.sos = butter(2, [low, high], btype="bandpass", fs=fps, output="sos")
+    def __init__(self, low, high, fps, order=2):
+        self.sos = butter(order, [low, high], btype="bandpass", fs=fps, output="sos")
         self.state = None
 
     def apply(self, image):
@@ -28,7 +28,7 @@ def pyramid(image, levels=4):
 
 
 class Magnifier:
-    def __init__(self, mode="color", gain=20, low=.7, high=3, fps=30):
+    def __init__(self, mode="color", gain=20, low=.7, high=3, fps=30, levels=4, order=2):
         if mode not in ("color", "motion"):
             raise ValueError("Choose color or motion")
         if not 0 < low < high < fps / 2:
@@ -37,12 +37,15 @@ class Magnifier:
             raise ValueError("Gain must be between 0 and 100")
         self.mode, self.gain = mode, gain
         self.low, self.high, self.fps = low, high, fps
+        if not 2 <= levels <= 6 or not 1 <= order <= 4:
+            raise ValueError("Use 2–6 pyramid levels and filter order 1–4")
+        self.levels, self.order = levels, order
         self.filters = {}
         self.clipped = 0.
 
     def bandpass(self, key, image):
         if key not in self.filters:
-            self.filters[key] = TemporalBandpass(self.low, self.high, self.fps)
+            self.filters[key] = TemporalBandpass(self.low, self.high, self.fps, self.order)
         return self.filters[key].apply(image)
 
     def process(self, frame):
@@ -50,7 +53,7 @@ class Magnifier:
             self.clipped = 0
             return frame.copy()
         image = frame.astype(np.float32) / 255
-        gaussian = pyramid(image)
+        gaussian = pyramid(image, self.levels)
         if self.mode == "color":
             signal = self.bandpass(0, gaussian[-1])
             for target in reversed(gaussian[:-1]):

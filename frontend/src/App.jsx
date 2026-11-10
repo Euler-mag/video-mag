@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import './App.css'
+import FilterSettings from './FilterSettings.jsx'
 import VideoWorkflow from './VideoWorkflow.jsx'
 
 async function api(path, method = 'GET', body) {
@@ -133,7 +134,7 @@ export default function App() {
             <button className="primary" disabled={busy || (!active && !canStart)} onClick={() => action(active ? async () => setStatus(await api('stop', 'POST')) : start)}>{busy ? 'Please wait…' : active ? 'Stop capture' : 'Start capture'}</button>
           </section>
           <section>
-            <h2>Amplification</h2>
+            <h2>Processing settings</h2>
             <div className="segmented modes">
               <button className={settings.mode === 'color' ? 'selected' : ''} disabled={busy} onClick={() => action(() => chooseMode('color'))}>Color amp</button>
               <button className={settings.mode === 'motion' ? 'selected' : ''} disabled={busy} onClick={() => action(() => chooseMode('motion'))}>Motion amp</button>
@@ -144,6 +145,11 @@ export default function App() {
               <div><label htmlFor="low">Low · Hz</label><input id="low" type="number" min="0.05" max="14.9" step="0.1" value={settings.low} onChange={event => setSettings({ ...settings, low: Number(event.target.value) })} /></div>
               <div><label htmlFor="high">High · Hz</label><input id="high" type="number" min="0.1" max="14.9" step="0.1" value={settings.high} onChange={event => setSettings({ ...settings, high: Number(event.target.value) })} /></div>
             </div>
+            <details>
+              <summary>Advanced filter settings</summary>
+              <FilterSettings prefix="live" settings={settings}
+                update={patch => setSettings(previous => ({ ...previous, ...patch }))} />
+            </details>
             <button className="secondary wide" disabled={busy} onClick={() => action(async () => { const data = await api('settings', 'PUT', settings); setSettings(data.config) })}>Apply settings</button>
             <p className="notice">{settings.mode === 'color' ? 'Eulerian color magnification.' : 'Laplacian Eulerian motion magnification.'} Allow a few seconds for the causal filter to settle after changing settings.</p>
           </section>

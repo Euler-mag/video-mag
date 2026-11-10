@@ -1,7 +1,5 @@
-"""File based wrist crop stabilization and FastDMM comparison jobs."""
-import json
+"""File based wrist crop stabilization and Eulerian magnification jobs."""
 import math
-import os
 import shutil
 import subprocess
 import threading
@@ -12,26 +10,23 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .evm import Magnifier
+
 
 ROOT = Path(__file__).resolve().parents[2]
 JOBS = ROOT / ".runtime" / "video-jobs"
-FASTMM_ROOT = Path("/home/vinnavan/user/models/video-mag/Fast-MM")
-FASTMM_PYTHON = Path("/home/vinnavan/user/models/video-mag/.venv/bin/python")
-FASTMM_ROOT = Path(os.environ.get("VIDEO_MAG_FASTMM_ROOT", str(FASTMM_ROOT)))
-FASTMM_PYTHON = Path(os.environ.get("VIDEO_MAG_FASTMM_PYTHON", str(FASTMM_PYTHON)))
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".m4v"}
-GAINS = (5, 10, 20)
 _lock = threading.RLock()
 _jobs: dict[str, dict] = {}
 _active: str | None = None
 
 
-def create_job(filename: str, points: list, low_hz: float, high_hz: float) -> dict:
+def create_job(filename: str, points: list, low_hz: float, high_hz: float, settings: dict) -> dict:
     global _active
     extension = Path(filename).suffix.lower()
     if extension not in ALLOWED_EXTENSIONS:
         raise ValueError("Choose an MP4, MOV, MKV, AVI, or M4V video")
-    if len(points) != 4 or any(len(point) != 2 for point in points):
+    if not isinstance(points, list) or len(points) != 4 or any(not isinstance(point, list) or len(point) != 2 for point in points):
         raise ValueError("Select exactly four points around the wrist")
     polygon = np.asarray(points, dtype=np.float32)
     if not np.isfinite(polygon).all() or np.any(polygon < 0) or np.any(polygon > 1):
@@ -48,7 +43,7 @@ def create_job(filename: str, points: list, low_hz: float, high_hz: float) -> di
         job_dir = JOBS / job_id
         job_dir.mkdir(parents=True, exist_ok=False)
         job = {"id": job_id, "state": "uploading", "filename": Path(filename).name,
-               "points": polygon.tolist(), "low_hz": float(low_hz), "high_hz": float(high_hz),
+               "points": polygon.tolist(), "settings": settings, "low_hz": float(low_hz), "high_hz": float(high_hz),
                "created": time.time(), "progress": 0, "current_gain": None,
                "completed_gains": [], "error": None, "files": []}
         _jobs[job_id] = job
@@ -70,7 +65,7 @@ def set_uploaded(job_id: str):
 
 def public_status(job: dict) -> dict:
     return {key: job[key] for key in ("id", "state", "filename", "progress", "current_gain",
-                                      "completed_gains", "error", "files", "low_hz", "high_hz")}
+                                      "completed_gains", "error", "files", "low_hz", "high_hz", "settings")}
 
 
 def status(job_id: str) -> dict:
@@ -84,7 +79,7 @@ def file_path(job_id: str, name: str) -> Path:
         base = job_path(job_id)
         if name not in _jobs[job_id]["files"]:
             raise ValueError("Result file is not ready")
-        path = base / name
+        path = base / "results" / name
         if not path.is_file():
             raise ValueError("Result file is no longer available")
         return path
@@ -120,15 +115,15 @@ def _update(job_id: str, **values):
             _jobs[job_id].update(values)
 
 
-def _expanded_crop(points: np.ndarray, width: int, height: int):
+def _expanded_crop(points: np.ndarray, width: int, height: int, margin: int):
     pixels = points * np.array([width - 1, height - 1], dtype=np.float32)
     x, y, w, h = cv2.boundingRect(pixels.reshape((-1, 1, 2)))
-    margin_x, margin_y = max(12, int(w * .2)), max(12, int(h * .2))
+    margin_x, margin_y = round(w * margin / 100), round(h * margin / 100)
     x0, y0 = max(0, x - margin_x), max(0, y - margin_y)
     x1, y1 = min(width, x + w + margin_x), min(height, y + h + margin_y)
     crop_w, crop_h = x1 - x0, y1 - y0
     if crop_w < 32 or crop_h < 32:
-        raise ValueError("Select a larger wrist region so the model can process it")
+        raise ValueError("Select a larger wrist region for processing")
     return x0, y0, crop_w, crop_h
 
 
@@ -147,7 +142,7 @@ def _prepare_stable_crop(job_id: str, crop_path: Path, original_crop_path: Path)
     if job["high_hz"] >= fps / 2:
         capture.release()
         raise ValueError(f"High cutoff must be below Nyquist ({fps / 2:.3g} Hz at {fps:.3g} FPS)")
-    x0, y0, crop_w, crop_h = _expanded_crop(np.asarray(job["points"], dtype=np.float32), width, height)
+    x0, y0, crop_w, crop_h = _expanded_crop(np.asarray(job["points"], dtype=np.float32), width, height, job["settings"]["margin"])
     original_crop_path.parent.mkdir(parents=True, exist_ok=True)
 
     encode_crop = subprocess.Popen([
@@ -164,8 +159,10 @@ def _prepare_stable_crop(job_id: str, crop_path: Path, original_crop_path: Path)
             if not ok:
                 break
             crop = frame[y0:y0 + crop_h, x0:x0 + crop_w]
-            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-            if reference is None:
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if job["settings"]["stabilize"] else None
+            if gray is None:
+                aligned = crop
+            elif reference is None:
                 reference = gray.astype(np.float32) / 255
                 aligned = crop
             else:
@@ -174,7 +171,8 @@ def _prepare_stable_crop(job_id: str, crop_path: Path, original_crop_path: Path)
                                          cv2.MOTION_TRANSLATION,
                                          (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 40, 1e-5),
                                          None, 5)
-                    warp[:, 2] = np.clip(warp[:, 2], [-crop_w * .18, -crop_h * .18], [crop_w * .18, crop_h * .18])
+                    limits = np.array([crop_w, crop_h]) * job["settings"]["max_shift"] / 100
+                    warp[:, 2] = np.clip(warp[:, 2], -limits, limits)
                 except cv2.error:
                     pass
                 aligned = cv2.warpAffine(crop, warp, (crop_w, crop_h),
@@ -195,12 +193,46 @@ def _prepare_stable_crop(job_id: str, crop_path: Path, original_crop_path: Path)
 
     preview = subprocess.run([
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(crop_path), "-an",
-        "-c:v", "libx264rgb", "-crf", "0", "-preset", "ultrafast", str(original_crop_path),
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+        "-crf", "16", "-preset", "veryfast", "-movflags", "+faststart", str(original_crop_path),
     ], capture_output=True, text=True, timeout=600)
     if preview.returncode:
         raise ValueError(f"Could not encode the stabilized crop preview: {preview.stderr[-1200:]}")
     _update(job_id, crop_size=[crop_w, crop_h], fps=round(fps, 4), frame_count=frame_index)
     return fps
+
+
+def _encode_amplified(job_id, source, destination, processor, index, total):
+    capture = cv2.VideoCapture(str(source))
+    try:
+        width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        count = _jobs[job_id]["frame_count"]
+        if not capture.isOpened():
+            raise ValueError("Could not read the prepared crop")
+        with subprocess.Popen([
+            "ffmpeg", "-nostdin", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "bgr24",
+            "-s:v", f"{width}x{height}", "-r", f"{processor.fps:.9g}", "-i", "-", "-an",
+            "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-crf", "16", "-preset", "veryfast", "-movflags", "+faststart", str(destination),
+        ], stdin=subprocess.PIPE) as encoder:
+            frames = 0
+            try:
+                while True:
+                    ok, frame = capture.read()
+                    if not ok:
+                        break
+                    encoder.stdin.write(processor.process(frame).tobytes())
+                    frames += 1
+                    if frames % 10 == 0:
+                        progress = 12 + 87 * (index + min(frames / count, 1)) / total
+                        _update(job_id, progress=int(progress))
+            finally:
+                encoder.stdin.close()
+            if encoder.wait() or frames != _jobs[job_id]["frame_count"]:
+                raise ValueError("Could not encode all frames of the amplified crop")
+    finally:
+        capture.release()
 
 
 def _run_job(job_id: str):
@@ -215,30 +247,22 @@ def _run_job(job_id: str):
         _update(job_id, state="preparing", progress=1, error=None)
         fps = _prepare_stable_crop(job_id, stable, original)
         shutil.rmtree(job_dir / "source", ignore_errors=True)
-        if not FASTMM_PYTHON.is_file() or not (FASTMM_ROOT / "run.py").is_file():
-            raise ValueError(f"FastDMM setup was not found at {FASTMM_ROOT}; configure VIDEO_MAG_FASTMM_ROOT and VIDEO_MAG_FASTMM_PYTHON")
-        low, high = _jobs[job_id]["low_hz"], _jobs[job_id]["high_hz"]
-        low_ratio, high_ratio = low / fps, high / fps
+        job = _jobs[job_id]
+        options = job["settings"]
+        gains = options["gains"]
         completed = []
-        _update(job_id, state="magnifying", progress=12, files=[original.name])
-        for index, gain in enumerate(GAINS):
-            _update(job_id, current_gain=gain, progress=12 + index * 29)
-            output_dir = work / f"gain-{gain}"
-            command = [str(FASTMM_PYTHON), str(FASTMM_ROOT / "run.py"), "--input", str(stable),
-                       "--output-dir", str(output_dir), "--model", "fast-dmm", "--filter", "butter",
-                       "--low", f"{low_ratio:.9g}", "--high", f"{high_ratio:.9g}",
-                       "--alpha", str(gain), "--device", "cuda"]
-            result = subprocess.run(command, cwd=FASTMM_ROOT, capture_output=True, text=True, timeout=3600)
-            if result.returncode:
-                raise ValueError(f"FastDMM failed at {gain}×: {(result.stderr or result.stdout)[-1800:]}")
-            candidates = list(output_dir.rglob("*.mp4"))
-            if not candidates:
-                raise ValueError(f"FastDMM completed at {gain}× but did not create an output video")
-            output_name = f"fastdmm_{gain}x.mp4"
-            shutil.copy2(candidates[0], result_dir / output_name)
+        files = [original.name]
+        _update(job_id, state="magnifying", progress=12, files=files)
+        for index, gain in enumerate(gains):
+            _update(job_id, current_gain=gain)
+            processor = Magnifier(mode=options["mode"], gain=gain, low=job["low_hz"],
+                                  high=job["high_hz"], fps=fps, levels=options["levels"],
+                                  order=options["order"])
+            name = f"evm_{gain}x.mp4"
+            _encode_amplified(job_id, stable, result_dir / name, processor, index, len(gains))
             completed.append(gain)
-            _update(job_id, completed_gains=completed, files=[original.name, *[f"fastdmm_{n}x.mp4" for n in completed]],
-                    progress=12 + (index + 1) * 29)
+            files.append(name)
+            _update(job_id, completed_gains=completed.copy(), files=files.copy())
         shutil.rmtree(work, ignore_errors=True)
         _update(job_id, state="completed", progress=100, current_gain=None)
     except Exception as exc:

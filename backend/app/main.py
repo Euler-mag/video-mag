@@ -30,12 +30,30 @@ class Settings(BaseModel):
     gain: float = Field(default=20, ge=0, le=100, allow_inf_nan=False)
     low: float = Field(default=.7, gt=0, allow_inf_nan=False)
     high: float = Field(default=3, gt=0, allow_inf_nan=False)
+    levels: int = Field(default=4, ge=2, le=6)
+    order: int = Field(default=2, ge=1, le=4)
     fps: Literal[30] = 30
 
     @model_validator(mode="after")
     def valid_band(self):
         if not self.low < self.high < self.fps / 2:
             raise ValueError("Use 0 < low < high < 15 Hz")
+        return self
+
+
+class VideoSettings(BaseModel):
+    mode: Literal["color", "motion"] = "motion"
+    gains: list[int] = Field(default_factory=lambda: [5, 10, 20], min_length=1, max_length=3)
+    levels: int = Field(default=4, ge=2, le=6)
+    order: int = Field(default=2, ge=1, le=4)
+    stabilize: bool = True
+    margin: int = Field(default=20, ge=0, le=50)
+    max_shift: int = Field(default=18, ge=1, le=30)
+
+    @model_validator(mode="after")
+    def valid_gains(self):
+        if len(set(self.gains)) != len(self.gains) or any(not 0 <= gain <= 100 for gain in self.gains):
+            raise ValueError("Choose distinct gains between 0 and 100")
         return self
 
 
@@ -91,7 +109,8 @@ async def upload_video(request: Request):
     try:
         points = json.loads(points_raw)
         low, high = float(low_raw), float(high_raw)
-        job = video_jobs.create_job(filename, points, low, high)
+        options = VideoSettings.model_validate_json(request.query_params.get("settings", "{}"))
+        job = video_jobs.create_job(filename, points, low, high, options.model_dump())
     except (ValueError, TypeError, json.JSONDecodeError) as exc:
         raise HTTPException(400, str(exc)) from exc
 
