@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+if [[ -x .runtime/tools/scrcpy-linux-x86_64-v5.0.1/scrcpy ]]; then
+  export PATH="$PWD/.runtime/tools/scrcpy-linux-x86_64-v5.0.1:$PATH"
+fi
 if [[ ! -x backend/.venv/bin/python || ! -d frontend/node_modules ]]; then
   echo 'Install dependencies first; see README.md.' >&2
   exit 1

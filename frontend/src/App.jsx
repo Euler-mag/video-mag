@@ -19,7 +19,6 @@ export default function App() {
   const [inventory, setInventory] = useState({ devices: [], loopbacks: [] })
   const [source, setSource] = useState('phone')
   const [serial, setSerial] = useState('')
-  const [sink, setSink] = useState('')
   const [cameras, setCameras] = useState([])
   const [cameraId, setCameraId] = useState('')
   const [cameraDetails, setCameraDetails] = useState('')
@@ -35,7 +34,6 @@ export default function App() {
     const nextSerial = data.devices.some(device => device.serial === serial) ? serial : data.devices.find(device => device.state === 'device')?.serial || ''
     if (nextSerial !== serial) { setCameras([]); setCameraId(''); setCameraDetails('') }
     setSerial(nextSerial)
-    setSink(previous => data.loopbacks.some(device => device.path === previous) ? previous : data.loopbacks[0]?.path || '')
   }
 
   useEffect(() => {
@@ -62,7 +60,6 @@ export default function App() {
       if (!mounted) return
       setInventory(data)
       setSerial(data.devices.find(device => device.state === 'device')?.serial || '')
-      setSink(data.loopbacks[0]?.path || '')
     }).catch(err => { if (mounted) setError(err.message) })
     const timer = setInterval(poll, 1000)
     return () => { mounted = false; clearInterval(timer) }
@@ -76,7 +73,7 @@ export default function App() {
   async function start() {
     const applied = await api('settings', 'PUT', settings)
     setSettings(applied.config)
-    const data = await api('start', 'POST', { source, serial, sink, camera_id: cameraId || null })
+    const data = await api('start', 'POST', { source, serial, camera_id: cameraId || null })
     setStatus(data); setStreamKey(key => key + 1)
   }
 
@@ -87,7 +84,7 @@ export default function App() {
   }
 
   const selectedPhone = inventory.devices.find(device => device.serial === serial)
-  const canStart = source === 'demo' || (selectedPhone?.state === 'device' && sink)
+  const canStart = source === 'demo' || selectedPhone?.state === 'device'
   return (
     <main className="app-shell">
       <header>
@@ -123,11 +120,6 @@ export default function App() {
                 {cameras.map(camera => <option key={camera.id} value={camera.id}>{camera.id} · {camera.description}</option>)}
               </select>
               {cameraDetails && <details><summary>Camera capabilities</summary><pre>{cameraDetails}</pre></details>}
-              <label htmlFor="sink">Virtual camera</label>
-              <select id="sink" value={sink} disabled={active} onChange={event => setSink(event.target.value)}>
-                {!inventory.loopbacks.length && <option value="">No V4L2 loopback available</option>}
-                {inventory.loopbacks.map(device => <option key={device.path} value={device.path}>{device.path} · {device.name}</option>)}
-              </select>
               {!serial && <p className="notice">Connect your phone, enable USB debugging and accept the authorization prompt. Then refresh.</p>}
             </> : <p className="notice">A 1.2 Hz color signal on the left and a subtly moving stripe on the right. Generated locally; this is not a phone feed.</p>}
             <button className="primary" disabled={busy || (!active && !canStart)} onClick={() => action(active ? async () => setStatus(await api('stop', 'POST')) : start)}>{busy ? 'Please wait…' : active ? 'Stop capture' : 'Start capture'}</button>

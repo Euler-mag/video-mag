@@ -3,6 +3,7 @@ import re
 import select
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from collections import deque
@@ -51,6 +52,10 @@ def cameras(serial):
         raise ValueError(raw.strip()[-1800:])
     found = []
     for line in raw.splitlines():
+        modern = re.search(r"--camera-id=([^\s]+)\s+\((.*)\)", line)
+        if modern:
+            found.append({"id": modern[1], "description": modern[2]})
+            continue
         match = re.match(r"\s*-\s+['\"]?([^\s'\"]+)['\"]?\s+\((.*)\)", line)
         if match:
             found.append({"id": match[1], "description": match[2]})
@@ -89,15 +94,11 @@ class Session:
             if self.worker and self.worker.is_alive():
                 raise ValueError("Stop the current capture first")
             if source == "phone":
-                for executable in ("adb", "scrcpy", "ffmpeg", "fuser", "v4l2-ctl"):
+                for executable in ("adb", "scrcpy", "ffmpeg"):
                     if not shutil.which(executable):
                         raise ValueError(f"Missing {executable}")
                 if serial not in [d["serial"] for d in devices() if d["state"] == "device"]:
                     raise ValueError("No authorized USB phone. Connect it and accept USB debugging.")
-                if sink not in [device["path"] for device in loopbacks()]:
-                    raise ValueError("Choose an existing V4L2 loopback device")
-                if command(["fuser", sink]).returncode == 0:
-                    raise ValueError("Virtual camera is in use. Stop its current producer/consumers first.")
             self.stop_event.clear()
             self.state, self.error, self.source = "starting", None, source
             self.frames = {"original": None, "amplified": None}
@@ -121,25 +122,20 @@ class Session:
         stream.close()
 
     def _phone_frames(self, serial, camera_id, sink):
+        with tempfile.TemporaryDirectory(prefix="video-mag-camera-") as temporary:
+            fifo = str(Path(temporary) / "camera.mkv")
+            os.mkfifo(fifo)
+            yield from self._phone_fifo_frames(serial, camera_id, fifo)
+
+    def _phone_fifo_frames(self, serial, camera_id, fifo):
         args = ["scrcpy", "-s", serial, "--video-source=camera", "--no-audio", "--no-control",
                 "--no-video-playback", "--max-size=1280", "--camera-fps=30",
-                "--video-codec=h264", "--video-bit-rate=20M", f"--v4l2-sink={sink}"]
+                "--video-codec=h264", "--video-bit-rate=20M", f"--record={fifo}", "--record-format=mkv"]
         args.append(f"--camera-id={camera_id}" if camera_id else "--camera-facing=back")
         producer = self._spawn(args)
         threading.Thread(target=self._log, args=(producer.stdout,), daemon=True).start()
-        deadline = time.monotonic() + 15
-        while not self.stop_event.is_set():
-            if producer.poll() is not None:
-                raise ValueError("scrcpy could not open the phone camera. See capture log.")
-            if command(["v4l2-ctl", "-d", sink, "--get-fmt-video"]).returncode == 0:
-                break
-            if time.monotonic() > deadline:
-                raise ValueError("Timed out waiting for the virtual camera")
-            self.stop_event.wait(.2)
-        if self.stop_event.is_set():
-            return
-        reader = self._spawn(["ffmpeg", "-hide_banner", "-loglevel", "error", "-threads", "2", "-f", "v4l2",
-                              "-i", sink, "-vf", "scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2",
+        reader = self._spawn(["ffmpeg", "-hide_banner", "-loglevel", "error", "-threads", "2",
+                              "-i", fifo, "-vf", "scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2",
                               "-an", "-threads", "2", "-filter_threads", "2", "-pix_fmt", "bgr24", "-f", "rawvideo", "pipe:1"])
         fd = reader.stdout.fileno()
         os.set_blocking(fd, False)
