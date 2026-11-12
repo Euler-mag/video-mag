@@ -3,7 +3,7 @@
 Local Fedora KDE prototype with two paths: **Process a video** uploads a local
 clip to the localhost app, lets you mark a wrist crop, stabilizes that crop, and
 compares classical Eulerian color or motion amplification at up to three gains. **Live camera** uses
-Galaxy S24 rear camera → scrcpy over USB/ADB → V4L2 loopback → FFmpeg → causal
+Galaxy S24 rear camera → scrcpy over USB/ADB → Matroska pipe → FFmpeg → causal
 Eulerian magnification. A synthetic source is available on the live camera path.
 
 ## Run
@@ -28,13 +28,9 @@ cd ..
 ./run.sh
 ```
 
-The phone source also requires `adb`, `scrcpy` with camera/V4L2 support,
-`ffmpeg`, `v4l2-ctl`, `fuser`, and an existing V4L2 loopback device. Fedora
-packages include `android-tools`, `scrcpy`, `v4l-utils`, and `psmisc`.
-V4L2 loopback installation/loading depends on the host kernel; the app does not
-install, unload or reconfigure kernel modules. On the development laptop,
-`/dev/video0` is an existing OBS Virtual Camera loopback. It must be unused;
-the app refuses to take a device with existing users.
+The phone source requires `adb`, `scrcpy` with camera recording support,
+and `ffmpeg`. scrcpy streams into a temporary Matroska pipe that FFmpeg reads
+directly. No virtual camera device is required.
 
 ## Connect the S24
 
@@ -44,7 +40,7 @@ the app refuses to take a device with existing users.
 4. Choose **S24 · USB**, click **Refresh**, then **Find lenses**.
 5. Select the main rear wide camera from Android's listed camera IDs. Automatic
    rear selection is available, but does not guarantee the specific main lens.
-6. Select the unused virtual camera and click **Start capture**.
+6. Click **Start capture**.
 7. Choose **Color amp** or **Motion amp**. Change gain/band and click
    **Apply settings**. Mode changes apply immediately and reset filter state.
 
@@ -92,7 +88,7 @@ toggle, and maximum stabilization shift. No AI runtime or weights are needed.
 - Frequency settings require `0 < low < high < 15 Hz` for the 30 FPS target.
 - The previews are JPEG/MJPEG representations of processed frames. No recording
   export, live ROI editor, physiological measurements or RAW capture is implemented.
-- V4L2/FFmpeg ingestion currently uses local frame-arrival timing rather than
+- Live FFmpeg ingestion currently uses local frame-arrival timing rather than
   preserved sensor timestamps. The filter assumes uniform 30 FPS. Low delivery
   rates, duplicated frames and camera processing can invalidate frequency
   interpretation. The UI reports processing rate and clipping; this is a
@@ -104,7 +100,7 @@ toggle, and maximum stabilization shift. No AI runtime or weights are needed.
 
 Research foundation: [Wu et al., Eulerian Video Magnification, 2012](https://people.csail.mit.edu/mrub/evm/).
 Capture reference: [scrcpy camera](https://github.com/Genymobile/scrcpy/blob/master/doc/camera.md)
-and [V4L2 output](https://github.com/Genymobile/scrcpy/blob/master/doc/v4l2.md).
+and [recording](https://github.com/Genymobile/scrcpy/blob/master/doc/recording.md).
 
 ## Verify
 
