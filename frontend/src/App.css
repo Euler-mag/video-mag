@@ -26,6 +26,22 @@ input[type=range] { width: 100%; accent-color: #b4c7ff; }
 .band-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .wide { width: 100%; margin-top: 14px; }
 .previews { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.preview-actions { display: flex; justify-content: flex-end; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.record-button { padding: 10px 14px; border: 1px solid #985354; border-radius: 7px; background: #422728; color: #ffd8d6; cursor: pointer; }
+.record-button.recording { background: #a63437; color: white; }
+.record-button:disabled { opacity: .5; cursor: not-allowed; }
+.record-download { color: #b4c7ff; font-size: 12px; }
+.record-warning { color: #f3c4a7; font-size: 12px; }
+.preview-footer { display: flex; justify-content: flex-end; padding: 6px 10px; }
+.fullscreen-button { display: grid; place-items: center; width: 40px; height: 40px; border: 0; border-radius: 6px; background: transparent; color: #d4def0; cursor: pointer; }
+.fullscreen-button:hover, .fullscreen-button:focus-visible { background: #354a7d; }
+.fullscreen-button svg { width: 20px; height: 20px; }
+.preview:fullscreen { display: flex; flex-direction: column; width: 100%; height: 100%; border: 0; border-radius: 0; background: #090c11; }
+.preview:fullscreen .video-surface { flex: 1; min-height: 0; aspect-ratio: auto; }
+.previews:fullscreen { position: relative; display: grid; grid-template-columns: 1fr 1fr; align-items: stretch; width: 100%; height: 100%; gap: 2px; padding: 0; background: #090c11; }
+.previews:fullscreen .preview { display: flex; flex-direction: column; min-height: 0; border: 0; border-radius: 0; }
+.previews:fullscreen .video-surface { flex: 1; min-height: 0; aspect-ratio: auto; }
+.split-exit { position: absolute; right: 12px; top: 10px; z-index: 1; padding: 8px 12px; border: 1px solid #586985; border-radius: 6px; background: #191e27; color: #e3ebff; cursor: pointer; }
 .preview { min-width: 0; border: 1px solid #303745; border-radius: 12px; background: #191e27; overflow: hidden; }
 .preview-title { display: flex; justify-content: space-between; align-items: center; padding: 18px; }
 .preview-title h2 { margin: 0; }

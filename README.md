@@ -44,8 +44,8 @@ directly. No virtual camera device is required.
 7. Choose **Color amp** or **Motion amp**. Change gain/band and click
    **Apply settings**. Mode changes apply immediately and reset filter state.
 
-Capture requests 30 FPS, H.264 at 20 Mbps and a camera size up to 1280 pixels.
-Processing uses 640×360 with aspect-preserving letterboxing. Startup failure,
+Capture requests the selected camera size and FPS with H.264 at 20 Mbps.
+Processing uses the requested capture resolution. Select CUDA for GPU EVM. Startup failure,
 USB disconnection and decoder failure appear in the interface and capture log.
 Stop terminates only the scrcpy/FFmpeg children started by this app.
 
@@ -127,3 +127,9 @@ approximately 30 FPS, with owned processes cleaned up after Stop. HTTP checks
 confirmed invalid-band rejection, missing-phone errors and MJPEG closing on Stop.
 The S24 was not connected during these checks; its camera capture remains to be
 verified on the actual device.
+
+
+For CUDA, create a Python 3.12 environment at `backend/.venv-gpu` with the
+backend requirements and a CUDA-enabled PyTorch installation. `run.sh` prefers
+this environment when present. The GPU backend performs classical EVM with
+PyTorch tensor operations and does not use AI model weights.

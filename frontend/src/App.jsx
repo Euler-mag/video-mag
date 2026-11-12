@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import './App.css'
 import FilterSettings from './FilterSettings.jsx'
 import VideoWorkflow from './VideoWorkflow.jsx'
@@ -22,12 +22,34 @@ export default function App() {
   const [serial, setSerial] = useState('')
   const [cameras, setCameras] = useState([])
   const [cameraId, setCameraId] = useState('')
+  const [cameraSize, setCameraSize] = useState('1280x720')
+  const [cameraTorch, setCameraTorch] = useState(false)
   const [cameraDetails, setCameraDetails] = useState('')
   const [settings, setSettings] = useState({ mode: 'color', gain: 20, low: 0.7, high: 3, fps: 30 })
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [streamKey, setStreamKey] = useState(0)
+  const [recordingResult, setRecordingResult] = useState(null)
+  const previewsRef = useRef(null)
+  const originalRef = useRef(null)
+  const amplifiedRef = useRef(null)
+  const [fullscreenTarget, setFullscreenTarget] = useState(null)
   const active = ['starting', 'running'].includes(status.state)
+
+  useEffect(() => {
+    const update = () => setFullscreenTarget(document.fullscreenElement)
+    document.addEventListener('fullscreenchange', update)
+    return () => document.removeEventListener('fullscreenchange', update)
+  }, [])
+
+  async function toggleFullscreen(element) {
+    try {
+      if (document.fullscreenElement === element) await document.exitFullscreen()
+      else await element.requestFullscreen()
+    } catch {
+      setError('Fullscreen is unavailable in this browser.')
+    }
+  }
 
   async function refresh() {
     const data = await api('devices')
@@ -45,6 +67,7 @@ export default function App() {
         const data = await api('status')
         if (mounted) {
           setStatus(data)
+          if (data.last_recording) setRecordingResult(data.last_recording)
           if (!initialized) {
             setSettings(data.config)
             if (data.source) setSource(data.source)
@@ -74,7 +97,7 @@ export default function App() {
   async function start() {
     const applied = await api('settings', 'PUT', settings)
     setSettings(applied.config)
-    const data = await api('start', 'POST', { source, serial, camera_id: cameraId || null })
+    const data = await api('start', 'POST', { source, serial, camera_id: cameraId || null, camera_size: cameraSize, camera_torch: cameraTorch })
     setStatus(data); setStreamKey(key => key + 1)
   }
 
@@ -116,17 +139,35 @@ export default function App() {
                 })}>Find lenses</button>
               </div>
               <label htmlFor="lens">Camera lens</label>
-              <select id="lens" value={cameraId} disabled={active} onChange={event => setCameraId(event.target.value)}>
+              <select id="lens" value={cameraId} disabled={active} onChange={event => { setCameraId(event.target.value); setSettings(previous => ({ ...previous, fps: 30 })) }}>
                 <option value="">Automatic rear camera</option>
                 {cameras.map(camera => <option key={camera.id} value={camera.id}>{camera.id} · {camera.description}</option>)}
               </select>
+              <label htmlFor="camera-size">Capture and processing resolution</label>
+              <select id="camera-size" value={cameraSize} disabled={active} onChange={event => setCameraSize(event.target.value)}>
+                {[...new Set(['1280x720', ...(cameras.find(camera => camera.id === cameraId)?.sizes || [])])].map(size => <option key={size} value={size}>{size}</option>)}
+              </select>
+              <label htmlFor="camera-fps">Capture FPS</label>
+              <select id="camera-fps" value={settings.fps} disabled={active} onChange={event => setSettings({ ...settings, fps: Number(event.target.value) })}>
+                {[15, 20, 24, 30, 60].filter(fps => !cameraId || (cameras.find(camera => camera.id === cameraId)?.fps || []).includes(fps)).map(fps => <option key={fps} value={fps}>{fps}</option>)}
+              </select>
               {cameraDetails && <details><summary>Camera capabilities</summary><pre>{cameraDetails}</pre></details>}
+              <label htmlFor="camera-torch">Flashlight
+                <input id="camera-torch" type="checkbox" checked={cameraTorch} disabled={active || busy}
+                  onChange={event => setCameraTorch(event.target.checked)} />
+              </label>
+              <p className="notice">Set before starting capture. Changing it requires restarting the camera.</p>
               {!serial && <p className="notice">Connect your phone, enable USB debugging and accept the authorization prompt. Then refresh.</p>}
             </> : <p className="notice">A 1.2 Hz color signal on the left and a subtly moving stripe on the right. Generated locally; this is not a phone feed.</p>}
-            <button className="primary" disabled={busy || (!active && !canStart)} onClick={() => action(active ? async () => setStatus(await api('stop', 'POST')) : start)}>{busy ? 'Please wait…' : active ? 'Stop capture' : 'Start capture'}</button>
+            <button className="primary" disabled={busy || status.recording || (!active && !canStart)} onClick={() => action(active ? async () => setStatus(await api('stop', 'POST')) : start)}>{busy ? 'Please wait…' : active ? 'Stop capture' : 'Start capture'}</button>
           </section>
           <section>
             <h2>Processing settings</h2>
+            <label htmlFor="compute-device">Processing device</label>
+            <select id="compute-device" value={settings.device || 'auto'} disabled={active} onChange={event => setSettings({ ...settings, device: event.target.value })}>
+              <option value="auto">Auto</option><option value="cuda">NVIDIA CUDA</option><option value="cpu">CPU</option>
+            </select>
+            {status.device_message && <p className="notice">{status.device_message}</p>}
             <div className="segmented modes">
               <button className={settings.mode === 'color' ? 'selected' : ''} disabled={busy} onClick={() => action(() => chooseMode('color'))}>Color amp</button>
               <button className={settings.mode === 'motion' ? 'selected' : ''} disabled={busy} onClick={() => action(() => chooseMode('motion'))}>Motion amp</button>
@@ -148,23 +189,47 @@ export default function App() {
         </aside>
         <div className="view-area">
           {(error || status.error) && <div role="alert" className="error-message">{error || status.error}</div>}
-          <div className="previews">
-            {['original', 'amplified'].map(kind => <section className="preview" key={kind}>
+          <div className="preview-actions">
+            <button className={status.recording ? 'record-button recording' : 'record-button'}
+              disabled={busy || (!status.recording && status.state !== 'running')}
+              onClick={() => action(async () => {
+                if (status.recording) {
+                  const result = await api('recording/stop', 'POST')
+                  setRecordingResult(result)
+                  setStatus(previous => ({ ...previous, recording: false }))
+                } else {
+                  setRecordingResult(null)
+                  setStatus(await api('recording/start', 'POST'))
+                }
+              })}>{status.recording ? '■ Stop recording' : '● Record'}</button>
+            {recordingResult && <a className="record-download" href={`/api/recording/${recordingResult.id}`}>Download recording</a>}
+            {recordingResult && (recordingResult.dropped > 0 || recordingResult.frames / recordingResult.fps < recordingResult.elapsed * 0.9) && <span className="record-warning">Some frames were missed; playback may be faster than real time.</span>}
+            <button className="secondary" onClick={() => toggleFullscreen(previewsRef.current)}>Fullscreen split screen</button>
+          </div>
+          <div className="previews" ref={previewsRef}>
+            {['original', 'amplified'].map(kind => <section className="preview" key={kind} ref={kind === 'original' ? originalRef : amplifiedRef}>
               <div className="preview-title"><h2>{kind === 'original' ? 'Original' : 'Amplified'}</h2><span>{kind === 'original' ? 'INPUT' : settings.mode.toUpperCase()}</span></div>
               <div className="video-surface">
                 {status.frames > 0 ? <img key={streamKey} src={`/api/stream/${kind}?session=${streamKey}`} alt={`${kind} live video`} /> : <div className="empty-preview"><span>◉</span><p>{status.state === 'starting' ? 'Opening camera…' : 'Ready for capture'}</p></div>}
               </div>
+              <div className="preview-footer">
+                <button className="fullscreen-button" aria-label={`Toggle fullscreen for ${kind} video`}
+                  title="Fullscreen view" onClick={() => toggleFullscreen(kind === 'original' ? originalRef.current : amplifiedRef.current)}>
+                  <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" /></svg>
+                </button>
+              </div>
             </section>)}
+            {fullscreenTarget?.classList.contains('previews') && <button className="split-exit" onClick={() => toggleFullscreen(previewsRef.current)}>Exit fullscreen</button>}
           </div>
           <div className="metrics">
             <div><span>Processing rate</span><strong>{status.fps} <small>FPS</small></strong></div>
-            <div><span>Frames processed</span><strong>{status.frames}</strong></div>
-            <div><span>Output clipping</span><strong>{status.clipping}<small>%</small></strong></div>
-            <div><span>Processing size</span><strong>640 <small>×</small> 360</strong></div>
+            <div><span>Processing device</span><strong>{status.device || "CPU"}</strong></div>
+            <div><span>EVM / preview</span><strong>{status.processing_ms ?? 0} / {status.preview_ms ?? 0} <small>ms</small></strong></div>
+            <div><span>Processing size</span><strong>{source === 'demo' ? '640×360' : cameraSize}</strong></div>
           </div>
-          {status.state === 'running' && status.frames > 90 && status.fps < 27 && <p className="warning">Frame delivery is below the configured 30 FPS. Frequency filtering may be inaccurate; this feed is a qualitative preview.</p>}
+          {status.state === 'running' && status.frames > 90 && status.fps < settings.fps * .9 && <p className="warning">Frame delivery is below the configured FPS. Frequency filtering may be inaccurate; this feed is a qualitative preview.</p>}
           {status.clipping > 1 && <p className="warning">Output is clipping. Reduce gain for a cleaner result.</p>}
-          <p className="footnote">30 FPS capture target · local processing · frame-arrival timing · preview only, not a validated measurement</p>
+          <p className="footnote">Configured FPS capture target · local processing · frame-arrival timing · preview only, not a validated measurement</p>
           {!!status.logs?.length && <details className="capture-log"><summary>Capture log</summary><pre>{status.logs.join('\n')}</pre></details>}
         </div>
       </div>}

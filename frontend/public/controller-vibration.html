@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Controller vibration</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #11151c; color: #eef2fa; }
+    main { max-width: 480px; margin: 12vh auto; padding: 32px; }
+    h1 { font-size: 24px; font-weight: 600; }
+    p { color: #b2bfd2; line-height: 1.6; }
+    label { display: flex; justify-content: space-between; margin: 32px 0 12px; }
+    input { width: 100%; accent-color: #b4c7ff; }
+    .status { min-height: 3em; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Controller vibration</h1>
+    <p id="status" class="status" role="status">Press a button on your controller to connect.</p>
+    <label for="strength">Vibration <strong id="percentage">0%</strong></label>
+    <input id="strength" type="range" min="0" max="100" step="1" value="0" disabled>
+  </main>
+  <script>
+    const status = document.querySelector('#status')
+    const slider = document.querySelector('#strength')
+    const percentage = document.querySelector('#percentage')
+    let selectedIndex = null
+    let timer = null
+
+    function actuator() {
+      return selectedIndex === null ? null : navigator.getGamepads()[selectedIndex]?.vibrationActuator
+    }
+    function stop() {
+      clearInterval(timer)
+      timer = null
+      const motor = actuator()
+      if (motor) motor.reset().catch(() => {})
+    }
+    function reset() {
+      stop()
+      slider.value = '0'
+      percentage.textContent = '0%'
+    }
+    function connect() {
+      const pads = Array.from(navigator.getGamepads()).filter(Boolean)
+      const selected = pads.find(pad => /xbox 360|evo.?fox/i.test(pad.id)) || pads.find(pad => pad.vibrationActuator)
+      if (!selected) {
+        if (selectedIndex !== null) reset()
+        selectedIndex = null
+        slider.disabled = true
+        status.textContent = 'Press a button on your controller to connect.'
+        return
+      }
+      if (selectedIndex !== selected.index) reset()
+      selectedIndex = selected.index
+      slider.disabled = !selected.vibrationActuator
+      status.textContent = selected.vibrationActuator
+        ? selected.id
+        : selected.id + ' — vibration is unavailable in this browser.'
+    }
+    function vibrate() {
+      const motor = actuator()
+      const strength = Number(slider.value) / 100
+      if (!motor || strength === 0) return
+      motor.playEffect('dual-rumble', {
+        duration: 600, strongMagnitude: strength, weakMagnitude: strength
+      }).catch(() => {
+        reset()
+        status.textContent = 'Could not start vibration. Try a Chromium browser and press a controller button.'
+      })
+    }
+    slider.addEventListener('input', () => {
+      percentage.textContent = slider.value + '%'
+      stop()
+      if (Number(slider.value) > 0) {
+        vibrate()
+        timer = setInterval(vibrate, 400)
+      }
+    })
+    window.addEventListener('gamepadconnected', connect)
+    window.addEventListener('gamepaddisconnected', connect)
+    document.addEventListener('visibilitychange', () => { if (document.hidden) reset() })
+    window.addEventListener('pagehide', reset)
+    if (!navigator.getGamepads) {
+      status.textContent = 'This browser does not support controller access.'
+    } else {
+      setInterval(connect, 1000)
+      connect()
+    }
+  </script>
+</body>
+</html>

@@ -17,6 +17,8 @@ session = Session()
 @asynccontextmanager
 async def lifespan(app):
     yield
+    if session.recording is not None:
+        session.stop_recording()
     session.stop()
 
 
@@ -32,12 +34,13 @@ class Settings(BaseModel):
     high: float = Field(default=3, gt=0, allow_inf_nan=False)
     levels: int = Field(default=4, ge=2, le=6)
     order: int = Field(default=2, ge=1, le=4)
-    fps: Literal[30] = 30
+    fps: Literal[15, 20, 24, 30, 60] = 30
+    device: Literal["auto", "cpu", "cuda"] = "auto"
 
     @model_validator(mode="after")
     def valid_band(self):
         if not self.low < self.high < self.fps / 2:
-            raise ValueError("Use 0 < low < high < 15 Hz")
+            raise ValueError("Require 0 < low < high < FPS / 2")
         return self
 
 
@@ -62,6 +65,8 @@ class Start(BaseModel):
     serial: str | None = None
     camera_id: str | None = None
     sink: str | None = None
+    camera_size: str = Field(default="1280x720", pattern=r"^\d{2,4}x\d{2,4}$")
+    camera_torch: bool = False
 
 
 def checked(function, *args, **kwargs):
@@ -99,6 +104,27 @@ def start(values: Start):
 @app.post("/api/stop")
 def stop():
     return checked(session.stop)
+
+
+@app.post("/api/recording/start")
+def start_recording():
+    return checked(session.start_recording)
+
+
+@app.post("/api/recording/stop")
+def stop_recording():
+    return checked(session.stop_recording)
+
+
+@app.get("/api/recording/{recording_id}")
+def download_recording(recording_id: str):
+    from .recording import RECORDINGS
+    if len(recording_id) != 32 or any(c not in "0123456789abcdef" for c in recording_id):
+        raise HTTPException(404, "Recording not found")
+    path = RECORDINGS / f"{recording_id}.mp4"
+    if not path.is_file():
+        raise HTTPException(404, "Recording not found")
+    return FileResponse(path, media_type="video/mp4", filename=f"video-mag-{recording_id[:8]}.mp4")
 
 
 @app.post("/api/video-jobs")
@@ -170,6 +196,6 @@ def stream(kind: Literal["original", "amplified"]):
                 yield b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(frame)).encode() + b"\r\n\r\n" + frame + b"\r\n"
             if not active:
                 return
-            await asyncio.sleep(1 / 30)
+            await asyncio.sleep(1 / 60)
     return StreamingResponse(frames(), media_type="multipart/x-mixed-replace; boundary=frame",
                              headers={"Cache-Control": "no-store"})

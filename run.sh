@@ -4,6 +4,9 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 if [[ -x .runtime/tools/scrcpy-linux-x86_64-v5.0.1/scrcpy ]]; then
   export PATH="$PWD/.runtime/tools/scrcpy-linux-x86_64-v5.0.1:$PATH"
 fi
+if [[ -x backend/.venv-gpu/bin/python && -z "${VIDEO_MAG_PYTHON:-}" ]]; then
+  export VIDEO_MAG_PYTHON=backend/.venv-gpu/bin/python
+fi
 if [[ ! -x backend/.venv/bin/python || ! -d frontend/node_modules ]]; then
   echo 'Install dependencies first; see README.md.' >&2
   exit 1
@@ -15,7 +18,7 @@ for port in 8000 5173; do
   fi
 done
 mkdir -p .runtime
-backend/.venv/bin/python -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000 --no-access-log --timeout-graceful-shutdown 3 > .runtime/backend.log 2>&1 &
+${VIDEO_MAG_PYTHON:-backend/.venv/bin/python} -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000 --no-access-log --timeout-graceful-shutdown 3 > .runtime/backend.log 2>&1 &
 backend_pid=$!
 (cd frontend && exec node node_modules/vite/bin/vite.js) > .runtime/frontend.log 2>&1 &
 frontend_pid=$!
