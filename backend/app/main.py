@@ -28,12 +28,14 @@ app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http
 
 
 class Settings(BaseModel):
+    method: Literal["linear", "riesz"] = "linear"
     mode: Literal["color", "motion"] = "color"
     gain: float = Field(default=20, ge=0, le=100, allow_inf_nan=False)
     low: float = Field(default=.7, gt=0, allow_inf_nan=False)
     high: float = Field(default=3, gt=0, allow_inf_nan=False)
     levels: int = Field(default=4, ge=2, le=6)
     order: int = Field(default=2, ge=1, le=4)
+    min_detail: int = Field(default=0, ge=0, le=256)
     fps: Literal[15, 20, 24, 30, 60] = 30
     device: Literal["auto", "cpu", "cuda"] = "auto"
 
@@ -45,16 +47,23 @@ class Settings(BaseModel):
 
 
 class VideoSettings(BaseModel):
+    zero_phase: bool = False
+    method: Literal["linear", "phase"] = "linear"
     mode: Literal["color", "motion"] = "motion"
     gains: list[int] = Field(default_factory=lambda: [5, 10, 20], min_length=1, max_length=3)
     levels: int = Field(default=4, ge=2, le=6)
     order: int = Field(default=2, ge=1, le=4)
+    min_detail: int = Field(default=0, ge=0, le=256)
     stabilize: bool = True
     margin: int = Field(default=20, ge=0, le=50)
     max_shift: int = Field(default=18, ge=1, le=30)
 
     @model_validator(mode="after")
     def valid_gains(self):
+        if self.zero_phase and (self.method != "phase" or self.mode != "motion"):
+            raise ValueError("Zero-phase filtering requires phase motion mode")
+        if self.method == "phase" and self.mode != "motion":
+            raise ValueError("Phase magnification requires motion mode")
         if len(set(self.gains)) != len(self.gains) or any(not 0 <= gain <= 100 for gain in self.gains):
             raise ValueError("Choose distinct gains between 0 and 100")
         return self

@@ -112,11 +112,11 @@ class Session:
                     "logs": list(self.logs), "timing": "local frame arrival; not sensor timestamps"}
 
     def configure(self, values):
-        Magnifier(**{key: value for key, value in values.items() if key != "device"})
+        Magnifier(**{key: value for key, value in values.items() if key not in ("device", "method")})
         with self.lock:
             if self.state in ("starting", "running") and values["fps"] != self.config["fps"]:
                 raise ValueError("Stop capture before changing FPS")
-            if any(values.get(key) != self.config.get(key) for key in ("mode", "low", "high", "fps", "levels", "order", "device")):
+            if any(values.get(key) != self.config.get(key) for key in ("mode", "low", "high", "fps", "levels", "order", "device", "method")):
                 self.filter_revision += 1
             self.config = dict(values)
             self.revision += 1
@@ -275,24 +275,34 @@ class Session:
                     config, current_revision = dict(self.config), self.filter_revision
                 if revision != current_revision or (previous is not None and now - previous > .25):
                     choice = config.pop("device", "auto")
+                    method = config.pop("method", "linear")
                     self.device_message = ""
                     if choice != "cpu":
                         try:
-                            from .evm_cuda import CudaMagnifier
-                            processor = CudaMagnifier(**config)
+                            if method == "riesz" and config["mode"] == "motion":
+                                from .riesz_cuda import RieszMagnifier
+                                processor = RieszMagnifier(**config)
+                            else:
+                                from .evm_cuda import CudaMagnifier
+                                processor = CudaMagnifier(**config)
                             self.device = "cuda"
                         except (ImportError, RuntimeError, ValueError) as exc:
                             if choice == "cuda":
                                 raise ValueError(f"CUDA initialization failed: {exc}") from exc
                             self.device_message = f"CUDA unavailable, using CPU: {exc}"
+                            if method == "riesz" and config["mode"] == "motion":
+                                raise ValueError("Riesz phase processing requires CUDA") from exc
                             processor = Magnifier(**config)
                             self.device = "cpu"
                     else:
+                        if method == "riesz" and config["mode"] == "motion":
+                            raise ValueError("Riesz phase processing requires CUDA")
                         processor = Magnifier(**config)
                         self.device = "cpu"
                     revision = current_revision
                 else:
                     processor.gain = config["gain"]
+                    processor.min_detail = config.get("min_detail", 0)
                 previous = now
                 processing_start = time.monotonic()
                 output = processor.process(frame)

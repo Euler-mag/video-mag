@@ -172,6 +172,19 @@ export default function App() {
               <button className={settings.mode === 'color' ? 'selected' : ''} disabled={busy} onClick={() => action(() => chooseMode('color'))}>Color amp</button>
               <button className={settings.mode === 'motion' ? 'selected' : ''} disabled={busy} onClick={() => action(() => chooseMode('motion'))}>Motion amp</button>
             </div>
+            {settings.mode === 'motion' && <>
+              <label htmlFor="motion-method">Motion method</label>
+              <select id="motion-method" value={settings.method || 'linear'} disabled={busy}
+                onChange={event => action(async () => {
+                  const values = { ...settings, method: event.target.value }
+                  const data = await api('settings', 'PUT', values)
+                  if (data.config.method !== values.method) throw new Error('The backend did not apply the selected method. Restart the app to load the latest version.')
+                  setSettings(data.config)
+                })}>
+                <option value="linear">Linear EVM</option>
+                <option value="riesz">Riesz phase (CUDA)</option>
+              </select>
+            </>}
             <label htmlFor="gain">Added gain <strong>{settings.gain}×</strong></label>
             <input id="gain" type="range" min="0" max="100" value={settings.gain} onChange={event => setSettings({ ...settings, gain: Number(event.target.value) })} />
             <div className="band-inputs">

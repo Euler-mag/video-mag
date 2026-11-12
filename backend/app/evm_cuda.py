@@ -67,7 +67,7 @@ class CudaMagnifier(Magnifier):
             for index, target in enumerate(gaussian[:-1]):
                 layer = target - self.up(gaussian[index + 1], target)
                 if index > 0:
-                    layer = layer + self.gain * index / (len(gaussian) - 2) * self.bandpass(index, layer)
+                    layer = layer + self.layer_gain(index, len(gaussian)) * self.bandpass(index, layer)
                 layers.append(layer)
             result = gaussian[-1]
             for layer in reversed(layers):

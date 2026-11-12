@@ -18,7 +18,7 @@ export default function VideoWorkflow() {
   const [dragIndex, setDragIndex] = useState(-1)
   const [band, setBand] = useState({ low: 0.7, high: 3 })
   const [settings, setSettings] = useState({
-    mode: 'motion', gains: [5, 10, 20], levels: 4, order: 2,
+    mode: 'motion', method: 'linear', zero_phase: false, gains: [5, 10, 20], levels: 4, order: 2,
     stabilize: true, margin: 20, max_shift: 18,
   })
   const updateSettings = patch => setSettings(previous => ({ ...previous, ...patch }))
@@ -56,7 +56,7 @@ export default function VideoWorkflow() {
     return [
       { name: job.settings?.stabilize ? 'Stabilized original crop' : 'Original crop', file: 'crop_original.mp4', gain: null },
       ...(job.completed_gains ?? [])
-        .map(gain => ({ name: `EVM · ${gain}×`, file: `evm_${gain}x.mp4`, gain })),
+        .map(gain => ({ name: `${job.settings?.method === "phase" ? "Phase" : "EVM"} · ${gain}×`, file: `evm_${gain}x.mp4`, gain })),
     ].filter(item => item.file === 'crop_original.mp4' ? job.files?.includes(item.file) : true)
       .map(item => ({ ...item, url: `${base}/${encodeURIComponent(item.file)}` }))
   }, [job])
@@ -195,10 +195,21 @@ export default function VideoWorkflow() {
           <p>Choose how to process the selected crop.</p>
           <fieldset className="processing-fields" disabled={processing || busy}>
             <label htmlFor="video-mode">Amplification mode</label>
-            <select id="video-mode" value={settings.mode} onChange={event => updateSettings({ mode: event.target.value })}>
+            <select id="video-mode" value={settings.mode} onChange={event => updateSettings({ mode: event.target.value, method: 'linear', zero_phase: false })}>
               <option value="motion">Motion</option>
               <option value="color">Color</option>
             </select>
+            {settings.mode === 'motion' && <>
+              <label htmlFor="video-method">Motion method</label>
+              <select id="video-method" value={settings.method || 'linear'} onChange={event => updateSettings({ method: event.target.value, zero_phase: false })}>
+                <option value="linear">Linear EVM</option>
+                <option value="phase">Steerable pyramid phase</option>
+              </select>
+            </>}
+            {settings.mode === 'motion' && settings.method === 'phase' && <label htmlFor="zero-phase">Zero-phase filter
+              <input id="zero-phase" type="checkbox" checked={settings.zero_phase}
+                onChange={event => updateSettings({ zero_phase: event.target.checked })} />
+            </label>}
             <label htmlFor="gain-count">Comparison outputs</label>
             <select id="gain-count" value={settings.gains.length} onChange={event => {
               const count = Number(event.target.value)

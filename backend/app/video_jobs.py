@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 
 from .evm import Magnifier
+from scipy.signal import butter, sosfiltfilt
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -202,7 +203,49 @@ def _prepare_stable_crop(job_id: str, crop_path: Path, original_crop_path: Path)
     return fps
 
 
-def _encode_amplified(job_id, source, destination, processor, index, total):
+
+def _zero_phase_signals(source, processor, count, work):
+    """Store unwrapped pyramid phases on disk and filter spatial tiles in time."""
+    capture = cv2.VideoCapture(str(source))
+    stores = {}
+    previous = {}
+    try:
+        for frame_index in range(count):
+            ok, frame = capture.read()
+            if not ok:
+                raise ValueError("Could not read all source frames for zero-phase filtering")
+            image = cv2.cvtColor(frame.astype(np.float32) / 255, cv2.COLOR_BGR2GRAY)
+            height = min(processor.levels, max(1, int(np.floor(np.log2(min(image.shape)))) - 2))
+            pyramid = processor.pyrtools.pyramids.SteerablePyramidFreq(image, height=height, order=3, is_complex=True)
+            for key, coeff in pyramid.pyr_coeffs.items():
+                if not isinstance(key, tuple):
+                    continue
+                phase = np.angle(coeff).astype(np.float32)
+                if key not in stores:
+                    stores[key] = np.memmap(work / f"phase-{key[0]}-{key[1]}.bin", mode="w+",
+                                             dtype="float32", shape=(count, *phase.shape))
+                    previous[key] = (phase, np.zeros_like(phase))
+                else:
+                    old, unwrapped = previous[key]
+                    unwrapped = unwrapped + np.angle(np.exp(1j * (phase - old)))
+                    previous[key] = (phase, unwrapped)
+                stores[key][frame_index] = previous[key][1]
+    finally:
+        capture.release()
+    sos = butter(processor.order, [processor.low, processor.high], btype="bandpass", fs=processor.fps, output="sos")
+    padlen = 3 * (2 * len(sos) + 1 - min((sos[:, 2] == 0).sum(), (sos[:, 5] == 0).sum()))
+    if count <= padlen:
+        raise ValueError(f"Zero-phase filtering needs more than {padlen} frames")
+    for key, store in stores.items():
+        flat = store.reshape(count, -1)
+        for start in range(0, flat.shape[1], 4096):
+            section = np.asarray(flat[:, start:start + 4096], dtype=np.float64)
+            flat[:, start:start + 4096] = sosfiltfilt(sos, section, axis=0).astype(np.float32)
+        store.flush()
+    return stores
+
+
+def _encode_amplified(job_id, source, destination, processor, index, total, filtered=None):
     capture = cv2.VideoCapture(str(source))
     try:
         width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -222,7 +265,9 @@ def _encode_amplified(job_id, source, destination, processor, index, total):
                     ok, frame = capture.read()
                     if not ok:
                         break
-                    encoder.stdin.write(processor.process(frame).tobytes())
+                    phases = {key: data[frames] for key, data in filtered.items()} if filtered else None
+                    output = processor.process(frame, phases) if phases is not None else processor.process(frame)
+                    encoder.stdin.write(output.tobytes())
                     frames += 1
                     if frames % 10 == 0:
                         progress = 12 + 87 * (index + min(frames / count, 1)) / total
@@ -253,16 +298,25 @@ def _run_job(job_id: str):
         completed = []
         files = [original.name]
         _update(job_id, state="magnifying", progress=12, files=files)
+        filtered = None
         for index, gain in enumerate(gains):
             _update(job_id, current_gain=gain)
-            processor = Magnifier(mode=options["mode"], gain=gain, low=job["low_hz"],
+            if options["method"] == "phase":
+                from .phase import PhaseMagnifier
+                processor_class = PhaseMagnifier
+            else:
+                processor_class = Magnifier
+            processor = processor_class(mode=options["mode"], gain=gain, low=job["low_hz"],
                                   high=job["high_hz"], fps=fps, levels=options["levels"],
-                                  order=options["order"])
+                                  order=options["order"], min_detail=options["min_detail"])
+            if options["zero_phase"] and options["method"] == "phase" and filtered is None:
+                filtered = _zero_phase_signals(stable, processor, job["frame_count"], work)
             name = f"evm_{gain}x.mp4"
-            _encode_amplified(job_id, stable, result_dir / name, processor, index, len(gains))
+            _encode_amplified(job_id, stable, result_dir / name, processor, index, len(gains), filtered)
             completed.append(gain)
             files.append(name)
             _update(job_id, completed_gains=completed.copy(), files=files.copy())
+        filtered = None
         shutil.rmtree(work, ignore_errors=True)
         _update(job_id, state="completed", progress=100, current_gain=None)
     except Exception as exc:

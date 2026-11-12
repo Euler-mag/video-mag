@@ -28,7 +28,7 @@ def pyramid(image, levels=4):
 
 
 class Magnifier:
-    def __init__(self, mode="color", gain=20, low=.7, high=3, fps=30, levels=4, order=2):
+    def __init__(self, mode="color", gain=20, low=.7, high=3, fps=30, levels=4, order=2, min_detail=0):
         if mode not in ("color", "motion"):
             raise ValueError("Choose color or motion")
         if not 0 < low < high < fps / 2:
@@ -39,6 +39,9 @@ class Magnifier:
         self.low, self.high, self.fps = low, high, fps
         if not 2 <= levels <= 6 or not 1 <= order <= 4:
             raise ValueError("Use 2–6 pyramid levels and filter order 1–4")
+        if not 0 <= min_detail <= 256:
+            raise ValueError("Minimum detail must be between 0 and 256 pixels")
+        self.min_detail = min_detail
         self.levels, self.order = levels, order
         self.filters = {}
         self.clipped = 0.
@@ -47,6 +50,13 @@ class Magnifier:
         if key not in self.filters:
             self.filters[key] = TemporalBandpass(self.low, self.high, self.fps, self.order)
         return self.filters[key].apply(image)
+
+    def layer_gain(self, index, count):
+        base = self.gain * index / (count - 2)
+        if not self.min_detail:
+            return base
+        wavelength = 2 ** (index + 1)
+        return base * min(1.0, wavelength / self.min_detail)
 
     def process(self, frame):
         if self.gain == 0:
@@ -67,7 +77,7 @@ class Magnifier:
                 expanded = cv2.pyrUp(gaussian[index + 1], dstsize=(target.shape[1], target.shape[0]))
                 layer = target - expanded
                 if index > 0:
-                    scale_gain = self.gain * index / (len(gaussian) - 2)
+                    scale_gain = self.layer_gain(index, len(gaussian))
                     layer = layer + scale_gain * self.bandpass(index, layer)
                 layers.append(layer)
             result = gaussian[-1]
